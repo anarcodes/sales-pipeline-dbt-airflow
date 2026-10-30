@@ -1,0 +1,162 @@
+# =============================================================================
+# Sales pipeline - local stack
+#   dwh-db              PostgreSQL warehouse: schemas stage / silver / mart
+#   airflow-db          PostgreSQL for Airflow metadata (deliberately NOT the warehouse)
+#   airflow-init        one-shot: DB migration + admin user
+#   airflow-api-server  UI + API                (http://localhost:${AIRFLOW_PORT})
+#   airflow-scheduler   scheduler + task runner (LocalExecutor: one container is enough here)
+#   airflow-dag-processor  parses files in ./dags
+#
+# Secrets are read from .env (git-ignored). Create it once:  python scripts/init_env.py
+# Start everything:                                          docker compose up --build
+# =============================================================================
+name: sales-pipeline
+
+x-airflow-common: &airflow-common
+  build:
+    context: ./docker/airflow
+    args:
+      AIRFLOW_VERSION: ${AIRFLOW_VERSION:-3.3.2}
+  image: sales-pipeline/airflow:${AIRFLOW_VERSION:-3.3.2}
+  # Run as the host user (group 0) so bind-mounted files keep sane ownership on Linux.
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:?run scripts/init_env.py first}@airflow-db:5432/${AIRFLOW_DB_NAME:-airflow}
+    # Shared secrets: every Airflow component must see the SAME values.
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?run scripts/init_env.py first}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?run scripts/init_env.py first}
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY:?run scripts/init_env.py first}
+    # Where task processes find the API server (service name on the compose network).
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Airflow stores/handles time in UTC internally. We keep that default and make each DAG
+    # timezone-aware explicitly (Asia/Baku) instead of changing the global setting.
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: utc
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # Our own shared code lives in ./include (import as `from sales_pipeline... import ...`).
+    PYTHONPATH: /opt/airflow/include
+    # Warehouse connection: (a) Airflow Connection "dwh_postgres" for PostgresHook,
+    # (b) plain env vars read by dbt's profiles.yml.
+    AIRFLOW_CONN_DWH_POSTGRES: postgresql://${DWH_USER:-dwh_user}:${DWH_PASSWORD:?run scripts/init_env.py first}@dwh-db:5432/${DWH_DB:-dwh}
+    DWH_HOST: dwh-db
+    DWH_PORT: "5432"
+    DWH_DB: ${DWH_DB:-dwh}
+    DWH_USER: ${DWH_USER:-dwh_user}
+    DWH_PASSWORD: ${DWH_PASSWORD}
+    # Source API + business timezone (non-secret, defaults live in include/sales_pipeline/config.py).
+    SOURCE_API_BASE_URL: ${SOURCE_API_BASE_URL:-https://services.odata.org/V4/Northwind/Northwind.svc}
+    BUSINESS_TIMEZONE: ${BUSINESS_TIMEZONE:-Asia/Baku}
+    # dbt: project + profiles live in ./dbt; build artifacts go to /tmp so the repo stays clean.
+    DBT_PROJECT_DIR: /opt/airflow/dbt
+    DBT_PROFILES_DIR: /opt/airflow/dbt
+    DBT_TARGET_PATH: /tmp/dbt/target
+    DBT_LOG_PATH: /tmp/dbt/logs
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./include:/opt/airflow/include
+    - ./dbt:/opt/airflow/dbt
+    - ./tests:/opt/airflow/tests
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-common-depends-on
+    airflow-db:
+      condition: service_healthy
+    dwh-db:
+      condition: service_healthy
+
+services:
+  # ---------------------------------------------------------------- databases
+  dwh-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DWH_DB:-dwh}
+      POSTGRES_USER: ${DWH_USER:-dwh_user}
+      POSTGRES_PASSWORD: ${DWH_PASSWORD:?run scripts/init_env.py first}
+    # Store timestamps/logs in UTC; business dates are plain DATE columns (no timezone ambiguity).
+    command: ["postgres", "-c", "timezone=UTC", "-c", "log_timezone=UTC"]
+    ports:
+      # Bound to 127.0.0.1: reachable from YOUR machine only, not from the network.
+      - "127.0.0.1:${DWH_PORT:-5433}:5432"
+    volumes:
+      - dwh-data:/var/lib/postgresql/data
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  airflow-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${AIRFLOW_DB_NAME:-airflow}
+      POSTGRES_USER: ${AIRFLOW_DB_USER:-airflow}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?run scripts/init_env.py first}
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ------------------------------------------------------------------ airflow
+  airflow-init:
+    <<: *airflow-common
+    # The image entrypoint reads the _AIRFLOW_* variables, migrates the DB and creates the admin
+    # user, then runs the command below (`airflow version`) and exits.
+    command: ["version"]
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?run scripts/init_env.py first}
+
+  airflow-api-server:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  dwh-data:
+  airflow-db-data:
+  airflow-logs:

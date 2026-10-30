@@ -1,0 +1,3 @@
+# Force LF line endings. Windows CRLF inside files mounted into Linux containers
+# (SQL init scripts, shell scripts) is a classic source of "it works on my machine" bugs.
+* text=auto eol=lf

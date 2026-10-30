@@ -1,0 +1,6 @@
+# dbt (installed into /opt/airflow/dbt_venv).
+# Ranges for now; after the first successful build run
+#   docker compose run --rm airflow-scheduler /opt/airflow/dbt_venv/bin/pip freeze
+# and pin the exact versions here for reproducible builds.
+dbt-core>=1.9,<2.0
+dbt-postgres>=1.9,<2.0

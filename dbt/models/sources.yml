@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: stage
+    description: Raw API data loaded by Airflow (tables are created by sql/init).
+    schema: stage
+    tables:
+      - name: customers
+      - name: products
+      - name: sales

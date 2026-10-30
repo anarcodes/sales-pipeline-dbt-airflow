@@ -1,0 +1,4 @@
+# Extra Python packages for Airflow's interpreter.
+# requests, psycopg2 and apache-airflow-providers-postgres already ship with the official image.
+# pytest: lets us run the test-suite INSIDE the container (same Python/Airflow as production).
+pytest>=8,<9

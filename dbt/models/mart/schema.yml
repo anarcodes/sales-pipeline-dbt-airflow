@@ -1,0 +1,50 @@
+version: 2
+
+models:
+  - name: d_customers
+    description: Customer dimension (star schema).
+    columns:
+      - name: customer_key
+        data_tests: [not_null, unique]
+      - name: customer_id
+        data_tests: [not_null, unique]
+
+  - name: d_products
+    description: Product dimension (star schema).
+    columns:
+      - name: product_key
+        data_tests: [not_null, unique]
+      - name: product_id
+        data_tests: [not_null, unique]
+
+  - name: f_weekly_sales_snapshot
+    description: "Fact. Grain - week x customer x product. FKs - customer_key, product_key."
+    data_tests:
+      - unique_combination:
+          combination_of_columns: [week_start, customer_key, product_key]
+    columns:
+      - name: week_start
+        data_tests: [not_null]
+      - name: customer_key
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('d_customers')
+              field: customer_key
+      - name: product_key
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('d_products')
+              field: product_key
+      # Reconciliation: aggregating must neither lose nor invent quantity or money.
+      - name: total_quantity
+        data_tests:
+          - sum_matches:
+              compare_model: ref('sales')
+              compare_column: quantity
+      - name: net_amount
+        data_tests:
+          - sum_matches:
+              compare_model: ref('sales')
+              compare_column: net_amount

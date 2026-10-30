@@ -1,0 +1,21 @@
+name: "sales_dbt"
+version: "1.0.0"
+config-version: 2
+profile: "sales_dbt"
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target"]
+# target/ and logs/ are redirected to /tmp via DBT_TARGET_PATH / DBT_LOG_PATH (see docker-compose.yml)
+
+models:
+  sales_dbt:
+    silver:
+      +schema: silver
+      +materialized: table
+      +tags: ["silver"]
+    mart:
+      +schema: mart
+      +materialized: table
+      +tags: ["mart"]

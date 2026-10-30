@@ -1,0 +1,13 @@
+# No secrets here: everything comes from environment variables (set in docker-compose.yml from .env).
+sales_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DWH_HOST') }}"
+      port: "{{ env_var('DWH_PORT') | as_number }}"
+      user: "{{ env_var('DWH_USER') }}"
+      password: "{{ env_var('DWH_PASSWORD') }}"
+      dbname: "{{ env_var('DWH_DB') }}"
+      schema: silver
+      threads: 4
