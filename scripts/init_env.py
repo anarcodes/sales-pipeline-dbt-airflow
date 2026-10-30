@@ -86,7 +86,7 @@ def main() -> None:
         pass
 
     admin_user = next(
-        (l.split("=", 1)[1] for l in rendered.splitlines() if l.startswith("AIRFLOW_ADMIN_USER=")),
+        (line.split("=", 1)[1] for line in rendered.splitlines() if line.startswith("AIRFLOW_ADMIN_USER=")),
         "admin",
     )
     print(f".env created at {TARGET}")
