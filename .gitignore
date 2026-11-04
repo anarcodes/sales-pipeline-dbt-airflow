@@ -23,3 +23,6 @@ logs/
 .DS_Store
 Thumbs.db
 .idea/
+
+# Windows download metadata (shows up in WSL)
+*:Zone.Identifier
