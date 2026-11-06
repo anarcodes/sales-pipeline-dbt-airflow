@@ -2,19 +2,25 @@
 ARG AIRFLOW_VERSION=3.3.2
 FROM apache/airflow:${AIRFLOW_VERSION}
 
+# --- KORPORATİV SSL/TLS MƏHDUDİYYƏTLƏRİNİN QARŞISINI ALMAQ ÜÇÜN QLOBAL PARAMETRLƏR ---
+ENV PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org"
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # (1) Extra packages for Airflow's own interpreter.
-# Pin apache-airflow to the version already in the image (env var set by the base image),
-# so pip can never "helpfully" upgrade/downgrade Airflow while resolving our packages.
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" -r /tmp/requirements.txt
 
-# (2) dbt lives in a separate venv. dbt-core and Airflow pin overlapping dependencies
-# (jinja2, protobuf, ...); installing both into one environment is the #1 cause of broken builds.
-# DAG tasks call it as /opt/airflow/dbt_venv/bin/dbt via BashOperator.
+# (2) dbt lives in a separate venv.
 COPY dbt-requirements.txt /tmp/dbt-requirements.txt
-RUN python -m venv /opt/airflow/dbt_venv \
-    && /opt/airflow/dbt_venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/airflow/dbt_venv/bin/pip install --no-cache-dir -r /tmp/dbt-requirements.txt
 
-# Smoke test: fail the BUILD (not the first DAG run) if either toolchain is broken.
+# Göndərdiyiniz lokal .whl faylını konteynerə kopyalayırıq
+COPY dbt_core-1.11.17-py3-none-any.whl /tmp/dbt_core-1.11.17-py3-none-any.whl
+
+RUN python -m venv /opt/airflow/dbt_venv \
+    && /opt/airflow/dbt_venv/bin/pip install --no-cache-dir --upgrade pip --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org \
+    # İnternetə/GitHub-a bağlanmadan birbaşa lokal .whl faylından quraşdırma:
+    && /opt/airflow/dbt_venv/bin/pip install --no-cache-dir /tmp/dbt_core-1.11.17-py3-none-any.whl \
+    && /opt/airflow/dbt_venv/bin/pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org -r /tmp/dbt-requirements.txt
+
+# Smoke test: fail the BUILD if either toolchain is broken.
 RUN python --version && /opt/airflow/dbt_venv/bin/dbt --version
